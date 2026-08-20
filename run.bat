@@ -1,10 +1,25 @@
 @echo off
 chcp 65001 >nul
-title Bilibili 自动化运营中台
 cd /d "%~dp0"
-python main.py
-if errorlevel 1 (
-    echo.
-    echo [错误] 脚本运行异常退出。
-    pause
+title Bilibili-AutoOps
+
+where python >nul 2>&1
+if %errorlevel% equ 0 (
+    set "PY_CMD=python"
+) else (
+    if exist "C:\Program Files\Python39\python.exe" (
+        set "PY_CMD=C:\Program Files\Python39\python.exe"
+    ) else (
+        if exist "%LOCALAPPDATA%\Programs\Python\Python39\python.exe" (
+            set "PY_CMD=%LOCALAPPDATA%\Programs\Python\Python39\python.exe"
+        ) else (
+            set "PY_CMD=py"
+        )
+    )
 )
+
+"%PY_CMD%" main.py
+echo.
+echo ========================================================
+echo [提示] 程序已结束运行。
+pause
