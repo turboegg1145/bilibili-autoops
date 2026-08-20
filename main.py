@@ -7,6 +7,7 @@ import os
 import argparse
 import asyncio
 import traceback
+from bilibili_api import user
 from src.config import Config
 from src.utils.logger import setup_logger, logger
 from src.auth.login import AuthManager
@@ -24,25 +25,64 @@ async def cmd_login(cfg: Config):
     auth_mgr = AuthManager(cfg.get("auth", "credential_file", default="./data/credentials.json"))
     cred = await auth_mgr.login_with_qrcode()
     if cred:
-        logger.info("🎉 登录成功并已存储凭据！")
+        logger.info("🎉 登录成功并已存储有效凭据！")
+        # 验证并输出用户信息
+        try:
+            u = user.User(uid=int(cred.dedeuserid), credential=cred)
+            info = await u.get_user_info()
+            logger.info(f"👤 当前已登录账号：【{info.get('name')}】 (UID: {cred.dedeuserid})")
+        except Exception:
+            pass
     else:
-        logger.error("登录失败，请重试！")
+        logger.error("登录失败或未获取到有效凭据，请重试！")
+
+async def cmd_manual_cookie(cfg: Config):
+    """手动输入/粘贴 Cookie"""
+    print("\n" + "=" * 55)
+    print("  🔑 手动录入 Bilibili Cookie 凭据")
+    print("=" * 55)
+    print("提示：在浏览器登录 B站 -> F12 -> 应用/存储 -> Cookie 中查看：")
+    sessdata = input("请输入 SESSDATA (必填): ").strip()
+    if not sessdata:
+        print("❌ SESSDATA 不能为空！")
+        return
+
+    bili_jct = input("请输入 bili_jct / csrf (推荐): ").strip()
+    dedeuserid = input("请输入 DedeUserID / UID (推荐): ").strip()
+
+    auth_mgr = AuthManager(cfg.get("auth", "credential_file", default="./data/credentials.json"))
+    cred = auth_mgr.manual_set_cookie(sessdata=sessdata, bili_jct=bili_jct, dedeuserid=dedeuserid)
+
+    logger.info("正在验证录入的凭据...")
+    is_valid = await auth_mgr.check_valid(cred)
+    if is_valid:
+        logger.info(f"✅ 凭据验证通过！UID: {cred.dedeuserid}")
+    else:
+        logger.warning("⚠️ 凭据已保存，但校验未通过，请检查是否填写完整！")
 
 async def cmd_check_auth(cfg: Config):
     """检查凭据状态"""
     auth_mgr = AuthManager(cfg.get("auth", "credential_file", default="./data/credentials.json"))
     cred = auth_mgr.load_credential()
-    if not cred:
-        logger.warning("未找到任何凭据文件，请先执行扫码登录！")
+    if not cred or not cred.sessdata:
+        logger.warning("未找到有效凭据文件，请先执行扫码登录！")
         return
 
     logger.info("正在验证凭据有效性...")
     is_valid = await auth_mgr.check_valid(cred)
     if is_valid:
-        logger.info(f"✅ 凭据有效！当前已登录 UID: {cred.dedeuserid}")
+        user_name = "B站用户"
+        if cred.dedeuserid:
+            try:
+                u = user.User(uid=int(cred.dedeuserid), credential=cred)
+                info = await u.get_user_info()
+                user_name = info.get("name", user_name)
+            except Exception:
+                pass
+        logger.info(f"✅ 凭据有效！当前已登录账号: 【{user_name}】 (UID: {cred.dedeuserid})")
         await auth_mgr.refresh_if_needed(cred)
     else:
-        logger.error("❌ 凭据已失效或过期，请重新登录！")
+        logger.error("❌ 凭据已失效或过期，请重新扫码登录！")
 
 async def cmd_upload(cfg: Config, args):
     """视频投稿"""
@@ -141,27 +181,30 @@ def interactive_menu(cfg: Config):
         print("=" * 55)
         print("  [1] 扫码登录 B 站账号 (login)")
         print("  [2] 检查账号凭据状态 (check-auth)")
-        print("  [3] 扫描 inbox/ 目录自动发布视频 (upload --inbox)")
-        print("  [4] 粉丝互动巡检 (评论/私信自动回复) (interact)")
-        print("  [5] 采集运营数据并生成日报 (stats)")
-        print("  [6] 启动全自动挂机守护进程 (daemon)")
+        print("  [3] 手动输入/粘贴 Cookie (manual-cookie)")
+        print("  [4] 扫描 inbox/ 目录自动发布视频 (upload --inbox)")
+        print("  [5] 粉丝互动巡检 (评论/私信自动回复) (interact)")
+        print("  [6] 采集运营数据并生成日报 (stats)")
+        print("  [7] 启动全自动挂机守护进程 (daemon)")
         print("  [0] 退出系统")
         print("=" * 55)
 
-        choice = input("请输入操作编号 [0-6]: ").strip()
+        choice = input("请输入操作编号 [0-7]: ").strip()
 
         if choice == "1":
             asyncio.run(cmd_login(cfg))
         elif choice == "2":
             asyncio.run(cmd_check_auth(cfg))
         elif choice == "3":
+            asyncio.run(cmd_manual_cookie(cfg))
+        elif choice == "4":
             args = argparse.Namespace(inbox=True, video=None)
             asyncio.run(cmd_upload(cfg, args))
-        elif choice == "4":
-            asyncio.run(cmd_interact(cfg))
         elif choice == "5":
-            asyncio.run(cmd_stats(cfg))
+            asyncio.run(cmd_interact(cfg))
         elif choice == "6":
+            asyncio.run(cmd_stats(cfg))
+        elif choice == "7":
             asyncio.run(cmd_daemon(cfg))
         elif choice in ("0", "q", "exit"):
             print("再见！")
@@ -183,6 +226,9 @@ def main():
 
         # check-auth
         subparsers.add_parser("check-auth", help="验证当前登录凭据有效性")
+
+        # manual-cookie
+        subparsers.add_parser("manual-cookie", help="手动录入 Cookie 凭据")
 
         # upload
         upload_parser = subparsers.add_parser("upload", help="执行视频投稿")
@@ -220,6 +266,8 @@ def main():
             asyncio.run(cmd_login(cfg))
         elif args.command == "check-auth":
             asyncio.run(cmd_check_auth(cfg))
+        elif args.command == "manual-cookie":
+            asyncio.run(cmd_manual_cookie(cfg))
         elif args.command == "upload":
             asyncio.run(cmd_upload(cfg, args))
         elif args.command == "interact":
