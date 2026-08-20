@@ -1,8 +1,10 @@
 """
 私信互动机器人
 拉取未读会话与私信，进行自动智能答复与防重处理。
+严格黑名单过滤（包括 Antigravy 本人、UP主小助手、自动打招呼号等）。
 """
 import asyncio
+import json
 from typing import Dict, Any, List
 from bilibili_api import Credential, session
 from bilibili_api.session import EventType
@@ -13,10 +15,28 @@ from src.utils.logger import logger
 class MessageBot:
     def __init__(self, credential: Credential, config: Dict[str, Any], storage: StorageManager):
         self.credential = credential
-        self.config = config
+        self.config = config or {}
         self.storage = storage
-        self.reply_engine = ReplyEngine(config)
+        self.reply_engine = ReplyEngine(self.config)
         self.self_mid = int(credential.dedeuserid) if credential.dedeuserid else None
+
+        # 黑名单 UID 与用户名
+        self.blacklist_uids = set(str(x) for x in self.config.get("blacklist_uids", []))
+        if self.self_mid:
+            self.blacklist_uids.add(str(self.self_mid))
+
+        self.blacklist_unames = set(str(x).lower() for x in self.config.get("blacklist_unames", [
+            "antigravy", "up主小助手", "哔哩哔哩智能机", "社区中心", "哔哩哔哩活动", "系统通知"
+        ]))
+        self.blacklist_unames.add("antigravy")
+
+    def is_blacklisted(self, talker_id: Any) -> bool:
+        """检查会话对象是否在黑名单中"""
+        if not talker_id or talker_id <= 0:
+            return True
+        if str(talker_id) in self.blacklist_uids:
+            return True
+        return False
 
     async def run_once(self) -> int:
         """执行一次私信扫描与自动回复"""
@@ -32,28 +52,26 @@ class MessageBot:
                 unread_count = sess.get("unread_count", 0)
                 last_msg = sess.get("last_msg", {})
 
-                # 忽略官方账号或空消息
-                if not talker_id or talker_id == self.self_mid or talker_id <= 0:
+                # 1. 严格过滤黑名单与本人
+                if self.is_blacklisted(talker_id):
                     continue
 
                 msg_key = str(last_msg.get("msg_key") or f"{talker_id}_{last_msg.get('msg_seq')}")
-                msg_type = last_msg.get("msg_type")
                 sender_uid = last_msg.get("sender_uid")
 
                 # 如果最后一条消息是自己发的，跳过
-                if sender_uid == self.self_mid:
+                if str(sender_uid) == str(self.self_mid):
                     continue
 
-                # 检查是否已回复过
+                # 2. 检查是否已回复过
                 if await self.storage.is_message_replied(msg_key):
                     continue
 
-                # 解析消息文本
+                # 3. 解析消息文本
                 msg_content = ""
                 content_raw = last_msg.get("content", "")
                 if isinstance(content_raw, str):
                     try:
-                        import json
                         parsed = json.loads(content_raw)
                         msg_content = parsed.get("content", content_raw)
                     except Exception:
@@ -62,7 +80,12 @@ class MessageBot:
                 if not msg_content:
                     continue
 
-                # 生成回复
+                # 4. 忽略常见的互关自动打招呼模板，避免对自动回复进行死循环
+                if "感谢关注" in msg_content or "自动回复" in msg_content or "欢迎关注" in msg_content:
+                    logger.debug(f"跳过自动打招呼模板私信: UID【{talker_id}】")
+                    continue
+
+                # 5. 生成回复
                 reply_text, _ = await self.reply_engine.generate_reply(msg_content, user_name=f"UID_{talker_id}")
 
                 try:

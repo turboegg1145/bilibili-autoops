@@ -34,6 +34,16 @@ interaction:
   auto_like_positive: true    # 自动给好评点赞
   reply_mode: "rule"          # 回复模式: "rule" (规则匹配) 或 "llm" (大模型生成)
   
+  # 黑名单配置 (严禁回复本人、系统号或特定用户)
+  blacklist_uids:
+    - 3546972533295723        # Antigravy 本人 UID
+  blacklist_unames:
+    - "antigravy"
+    - "UP主小助手"
+    - "哔哩哔哩智能机"
+    - "社区中心"
+    - "系统通知"
+
   # 规则模式预设回复
   rules:
     - keywords: ["求更新", "催更", "快更新"]

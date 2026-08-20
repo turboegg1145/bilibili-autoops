@@ -1,7 +1,7 @@
 """
 评论区互动机器人
 自动获取近期视频评论，识别未回复内容并进行智能回复与点赞。
-内置自动防分裂/去重机制，自动清理网页端接口并发导致的重复评论。
+严格黑名单过滤（包括 Antigravy 本人与系统号），内置自动防分裂/去重机制。
 """
 import asyncio
 from typing import Dict, Any, List, Optional
@@ -14,12 +14,30 @@ from src.utils.logger import logger
 class CommentBot:
     def __init__(self, credential: Credential, config: Dict[str, Any], storage: StorageManager):
         self.credential = credential
-        self.config = config
+        self.config = config or {}
         self.storage = storage
-        self.reply_engine = ReplyEngine(config)
-        self.recent_videos_count = config.get("recent_videos_count", 5)
-        self.auto_like_positive = config.get("auto_like_positive", True)
+        self.reply_engine = ReplyEngine(self.config)
+        self.recent_videos_count = self.config.get("recent_videos_count", 5)
+        self.auto_like_positive = self.config.get("auto_like_positive", True)
         self.self_mid = int(credential.dedeuserid) if credential.dedeuserid else None
+
+        # 黑名单列表 (包含 Antigravy 本人 UID、名称及官方系统号)
+        self.blacklist_uids = set(str(x) for x in self.config.get("blacklist_uids", []))
+        if self.self_mid:
+            self.blacklist_uids.add(str(self.self_mid))
+
+        self.blacklist_unames = set(str(x).lower() for x in self.config.get("blacklist_unames", [
+            "antigravy", "up主小助手", "哔哩哔哩智能机", "社区中心", "哔哩哔哩活动", "系统通知"
+        ]))
+        self.blacklist_unames.add("antigravy")
+
+    def is_blacklisted(self, mid: Any, uname: str) -> bool:
+        """检查用户是否在黑名单中 (严禁回复本人或系统号)"""
+        if mid and str(mid) in self.blacklist_uids:
+            return True
+        if uname and uname.lower() in self.blacklist_unames:
+            return True
+        return False
 
     async def get_recent_videos(self) -> List[Dict[str, Any]]:
         """获取当前 UP 主最近发布的视频列表"""
@@ -102,8 +120,8 @@ class CommentBot:
                 user_name = member.get("uname", "粉丝")
                 message = c_item.get("content", {}).get("message", "")
 
-                # 忽略 UP 主自己的发言
-                if author_mid == self.self_mid:
+                # 严格黑名单与本人过滤
+                if self.is_blacklisted(author_mid, user_name):
                     continue
 
                 # 检查是否已回复过
