@@ -94,23 +94,42 @@ class AuthManager:
         qr = login_v2.QrCodeLogin()
         await qr.generate_qrcode()
 
-        # 输出终端字符画二维码
-        print("\n" + "=" * 40)
-        print("请使用 Bilibili 手机客户端扫码登录：")
-        print("=" * 40)
-        qr.get_qrcode_terminal()
-        print("=" * 40 + "\n")
+        qr_terminal_str = qr.get_qrcode_terminal()
 
-        if save_qr_img:
-            qr_img_path = "./data/login_qrcode.png"
+        # 输出终端字符画二维码
+        print("\n" + "=" * 50)
+        print("请使用 Bilibili 手机客户端扫码登录：")
+        print("=" * 50)
+        if qr_terminal_str and qr_terminal_str.strip():
+            print(qr_terminal_str)
+        else:
             try:
-                img = qr.get_qrcode_picture()
-                img.save(qr_img_path)
-                logger.info(f"二维码图片已保存至: {qr_img_path} (可直接双击打开扫码)")
+                import qrcode
+                qr_link = getattr(qr, "_QrCodeLogin__qr_link", None)
+                if qr_link:
+                    qr_gen = qrcode.QRCode()
+                    qr_gen.add_data(qr_link)
+                    qr_gen.print_ascii(invert=True)
+            except Exception:
+                pass
+        print("=" * 50 + "\n")
+
+        qr_img_path = "./data/login_qrcode.png"
+        if save_qr_img:
+            try:
+                pic = qr.get_qrcode_picture()
+                pic.to_file(qr_img_path)
+                logger.info(f"二维码图片已保存至: {qr_img_path}")
+                # 在 Windows 下尝试自动唤起默认图片查看器
+                if hasattr(os, "startfile"):
+                    try:
+                        os.startfile(os.path.abspath(qr_img_path))
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.debug(f"保存二维码图片略过: {e}")
 
-        logger.info("等待扫码中...")
+        logger.info("等待扫码中... (请使用手机B站扫码并确认)")
         while not qr.has_done():
             state = await qr.check_state()
             if state == QrCodeLoginEvents.SCAN:
@@ -125,9 +144,9 @@ class AuthManager:
             logger.info("登录成功！正在保存凭据...")
             self.save_credential(cred)
             # 清理临时二维码图片
-            if os.path.exists("./data/login_qrcode.png"):
+            if os.path.exists(qr_img_path):
                 try:
-                    os.remove("./data/login_qrcode.png")
+                    os.remove(qr_img_path)
                 except Exception:
                     pass
             return cred
