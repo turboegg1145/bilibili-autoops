@@ -63,33 +63,53 @@ class VideoPublisher:
         pages = [VideoUploaderPage(path=video_path, title=page_title)]
 
         # 3. 构造元数据
-        meta_dict = {
-            "tid": int(tid),
-            "title": title[:80],
-            "desc": desc[:2000],
-            "tags": tags[:12],
-            "original": True if int(copyright) == 1 else False,
-            "source": source if int(copyright) != 1 else "",
-            "dynamic": dynamic if dynamic else f"发布了新视频《{title}》，欢迎观看！"
-        }
+        if cover_pic:
+            video_meta = VideoMeta(
+                tid=int(tid),
+                title=title[:80],
+                desc=desc[:2000],
+                cover=cover_pic,
+                tags=tags[:12],
+                original=True if int(copyright) == 1 else False,
+                source=source if int(copyright) != 1 else "",
+                dynamic=dynamic if dynamic else f"发布了新视频《{title}》，欢迎观看！"
+            )
+        else:
+            video_meta = VideoMeta(
+                tid=int(tid),
+                title=title[:80],
+                desc=desc[:2000],
+                cover="",
+                tags=tags[:12],
+                original=True if int(copyright) == 1 else False,
+                source=source if int(copyright) != 1 else "",
+                dynamic=dynamic if dynamic else f"发布了新视频《{title}》，欢迎观看！"
+            )
 
         # 4. 创建上传器
         uploader = VideoUploader(
             pages=pages,
-            meta=meta_dict,
+            meta=video_meta,
             credential=self.credential,
             cover=cover_pic if cover_pic else ""
         )
 
         # 5. 绑定事件监听器
-        last_pct = 0
-        @uploader.on(VideoUploaderEvents.PROGRESS)
-        async def on_progress(data):
-            nonlocal last_pct
-            pct = int(data.get("progress", 0) * 100) if isinstance(data, dict) else 0
-            if pct >= last_pct + 10 or pct == 100:
-                last_pct = pct
-                logger.info(f"上传进度: {pct}%")
+        @uploader.on(VideoUploaderEvents.AFTER_CHUNK.value)
+        async def on_chunk(data):
+            logger.info("分片上传中...")
+
+        @uploader.on(VideoUploaderEvents.AFTER_COVER.value)
+        async def on_cover(data):
+            logger.info("封面上传完成！")
+
+        @uploader.on(VideoUploaderEvents.COMPLETED.value)
+        async def on_complete(data):
+            logger.info(f"视频发布成功！BV号: {data.get('bvid')}")
+
+        @uploader.on(VideoUploaderEvents.FAILED.value)
+        async def on_failed(data):
+            logger.error(f"发布失败: {data}")
 
         logger.info("开始分片上传视频数据...")
         result = await uploader.start()

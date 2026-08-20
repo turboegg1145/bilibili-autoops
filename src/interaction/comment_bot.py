@@ -1,6 +1,7 @@
 """
 评论区互动机器人
 自动获取近期视频评论，识别未回复内容并进行智能回复与点赞。
+内置自动防分裂/去重机制，自动清理网页端接口并发导致的重复评论。
 """
 import asyncio
 from typing import Dict, Any, List, Optional
@@ -33,6 +34,49 @@ class CommentBot:
         except Exception as e:
             logger.error(f"获取 UP 主近期视频失败: {e}")
             return []
+
+    async def clean_duplicate_self_comments(self, aid: int):
+        """自动检测并清理因 B 站接口 Bug 导致分裂的多余重复评论"""
+        try:
+            res = await comment.get_comments(
+                oid=aid,
+                type_=CommentResourceType.VIDEO,
+                order=OrderType.TIME,
+                credential=self.credential
+            )
+            replies = res.get("replies") or []
+            top = res.get("top") or {}
+            top_rpid = None
+            if isinstance(top, dict):
+                top_rpid = top.get("upper", {}).get("rpid")
+
+            seen_messages = set()
+            for r in replies:
+                rpid = r.get("rpid")
+                member = r.get("member", {})
+                author_mid = member.get("mid")
+                msg = r.get("content", {}).get("message", "").strip()
+
+                # 只检测自己发送的评论
+                if str(author_mid) == str(self.self_mid):
+                    # 置顶评论绝对保留
+                    if rpid == top_rpid:
+                        seen_messages.add(msg)
+                        continue
+
+                    if msg in seen_messages:
+                        logger.warning(f"检测到分裂重复评论 (rpid: {rpid})，正在自动删除清理...")
+                        try:
+                            c_obj = Comment(oid=aid, type_=CommentResourceType.VIDEO, rpid=rpid, credential=self.credential)
+                            await c_obj.delete()
+                            logger.info(f"已成功删除多余重复评论: {rpid}")
+                        except Exception as e:
+                            logger.error(f"删除重复评论失败: {e}")
+                    else:
+                        seen_messages.add(msg)
+
+        except Exception as e:
+            logger.debug(f"评论去重巡检异常 (可忽略): {e}")
 
     async def process_video_comments(self, aid: int, bvid: str, title: str) -> int:
         """处理单个视频的评论区"""
@@ -101,6 +145,9 @@ class CommentBot:
                     await asyncio.sleep(5)
                 except Exception as e:
                     logger.error(f"发送评论回复失败 (rpid={rpid}): {e}")
+
+            # 3. 每次巡检回复后，自动执行一次去重清理，防止接口分裂
+            await self.clean_duplicate_self_comments(aid)
 
             return replied_count
 
